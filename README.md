@@ -124,12 +124,84 @@ delete_all()                # 전체 삭제 (주의)
 
 ---
 
+## Gemini API 한계 및 Groq 전환 이유
+
+개발 초기 Gemini API를 사용했으나 아래 문제로 Groq으로 전환했습니다.
+
+| 문제 | 내용 |
+|------|------|
+| 한국 지역 제한 | 무료 티어 limit: 0 으로 설정되는 문제 발생 |
+| 일일 요청 한도 | 429 RESOURCE_EXHAUSTED 오류 반복 |
+| 분당 요청 한도 | 짧은 시간 내 여러 요청 시 차단 |
+
+```
+오류 예시:
+429 RESOURCE_EXHAUSTED
+* Quota exceeded for metric: generate_content_free_tier_requests, limit: 0
+```
+
+**Groq 선택 이유:** 한국에서 정상 작동, 넉넉한 무료 티어, LLaMA 3.3 70B 무료 사용 가능
+
+---
+
 ## 개선 가능한 점
 
-- 임베딩 모델을 `BAAI/bge-m3`으로 교체 → 한국어 검색 품질 향상
-- `RecursiveCharacterTextSplitter` 도입 → 문장 경계 존중 청킹
+### 1. 한국어 검색 품질 향상 — 임베딩 모델 교체
+
+현재 `all-MiniLM-L6-v2`는 영어 중심 모델이라 한국어 성능이 제한적입니다.
+
+```python
+# ingest.py & chatbot.py 수정
+# 기존
+EMBED_MODEL = "all-MiniLM-L6-v2"
+
+# 개선
+EMBED_MODEL = "BAAI/bge-m3"  # 다국어 지원, 한국어 성능 우수
+```
+
+### 2. 문장 경계 존중 청킹 — RecursiveCharacterTextSplitter 도입
+
+현재 고정 크기로 자르면 문장 중간에서 잘릴 수 있습니다.
+
+```python
+# 기존: 고정 크기 청킹
+def chunk_text(text, chunk_size=500, overlap=50):
+    ...
+
+# 개선: langchain RecursiveCharacterTextSplitter
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+
+splitter = RecursiveCharacterTextSplitter(
+    chunk_size=500,
+    chunk_overlap=50,
+    separators=["\n\n", "\n", ".", " "]  # 문단 → 문장 → 단어 순서로 분리
+)
+chunks = splitter.split_text(text)
+```
+
+### 3. 멀티턴 대화 히스토리 유지
+
+현재는 매 질문이 독립적으로 처리되어 이전 대화 내용을 기억하지 못합니다.
+
+```python
+# chatbot.py 개선안
+chat_history = []  # 대화 히스토리 저장
+
+def ask_groq(prompt: str) -> str:
+    chat_history.append({"role": "user", "content": prompt})
+
+    response = client.chat.completions.create(
+        model=GROQ_MODEL,
+        messages=chat_history  # 전체 히스토리 전달
+    )
+
+    answer = response.choices[0].message.content
+    chat_history.append({"role": "assistant", "content": answer})
+    return answer
+```
+
+### 4. 기타
 - PDF, DOCX 등 다양한 파일 형식 지원
-- 대화 히스토리 유지 (멀티턴 대화)
 - 웹 UI 추가 (Streamlit 등)
 
 ---
