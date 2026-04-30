@@ -47,24 +47,6 @@ pip install chromadb sentence-transformers google-genai
 
 ---
 
-## 🔑 환경변수 설정
-
-Gemini API 키가 필요합니다. [Google AI Studio](https://aistudio.google.com/app/apikey)에서 발급받으세요.
-
-**Windows:**
-```bash
-set GEMINI_API_KEY=AIza...
-```
-
-**Mac / Linux:**
-```bash
-export GEMINI_API_KEY=AIza...
-```
-
-> 💡 매번 설정하기 귀찮다면 Windows 환경 변수에 영구 등록하세요.
-
----
-
 ## 🚀 사용 방법
 
 ### 1단계 — 문서 추가
