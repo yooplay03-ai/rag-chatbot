@@ -1,21 +1,24 @@
 """
-chatbot.py — RAG 방식으로 Gemini API를 호출하는 챗봇 모듈
+chatbot.py — RAG 방식으로 Groq API를 호출하는 챗봇 모듈
 사용법: python chatbot.py
 """
 
 import os
-from google import genai
+from groq import Groq
 import chromadb
 from chromadb.utils import embedding_functions
+from sentence_transformers import CrossEncoder
 
 
 # ── 설정 ──────────────────────────────────────────────────────────────────────
 CHROMA_PATH = "./chroma_db"
 COLLECTION_NAME = "my_documents"
-EMBED_MODEL = "all-MiniLM-L6-v2"
+EMBED_MODEL = "all-MiniLM-L6-v2"       # ← 누락된 변수 추가
+GROQ_MODEL = "llama-3.3-70b-versatile"
 
 TOP_K = 3
-GEMINI_MODEL = "gemini-2.0-flash-lite"  # 무료 티어, 한도 넉넉
+CANDIDATE_K = 10
+RERANK_MODEL = "BAAI/bge-reranker-v2-m3"
 
 
 # ── ChromaDB 컬렉션 가져오기 ──────────────────────────────────────────────────
@@ -31,27 +34,40 @@ def get_collection():
     )
 
 
-# ── 관련 문서 검색 ─────────────────────────────────────────────────────────────
+# ── Reranker 초기화 (한 번만 로드) ────────────────────────────────────────────
+reranker = CrossEncoder(RERANK_MODEL)
+
+
+# ── 관련 문서 검색 + Reranking ─────────────────────────────────────────────────
 def retrieve(query: str, top_k: int = TOP_K) -> list[dict]:
     collection = get_collection()
+
     results = collection.query(
         query_texts=[query],
-        n_results=top_k,
+        n_results=CANDIDATE_K,
         include=["documents", "metadatas", "distances"]
     )
 
-    chunks = []
+    candidates = []
     for doc, meta, dist in zip(
         results["documents"][0],
         results["metadatas"][0],
         results["distances"][0]
     ):
-        chunks.append({
+        candidates.append({
             "text": doc,
             "doc_id": meta.get("doc_id", "unknown"),
             "distance": round(dist, 4)
         })
-    return chunks
+
+    pairs = [[query, c["text"]] for c in candidates]
+    scores = reranker.predict(pairs)
+
+    for c, score in zip(candidates, scores):
+        c["rerank_score"] = round(float(score), 4)
+
+    reranked = sorted(candidates, key=lambda x: x["rerank_score"], reverse=True)
+    return reranked[:top_k]
 
 
 # ── 프롬프트 구성 ──────────────────────────────────────────────────────────────
@@ -71,20 +87,20 @@ def build_prompt(query: str, context_chunks: list[dict]) -> str:
 질문: {query}"""
 
 
-# ── Gemini API 호출 ────────────────────────────────────────────────────────────
-def ask_gemini(prompt: str) -> str:
-    api_key = os.environ.get("GEMINI_API_KEY")
+# ── Groq API 호출 ──────────────────────────────────────────────────────────────
+def ask_groq(prompt: str) -> str:          # ← ask_gemini → ask_groq 로 변경
+    api_key = os.environ.get("GROQ_API_KEY")
     if not api_key:
         raise EnvironmentError(
-            "GEMINI_API_KEY 환경변수가 설정되지 않았습니다.\n"
-            "터미널에서: set GEMINI_API_KEY=AIza..."
+            "GROQ_API_KEY 환경변수가 설정되지 않았습니다.\n"
+            "터미널에서: set GROQ_API_KEY=gsk_..."
         )
-    client = genai.Client(api_key=api_key)
-    response = client.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=prompt
+    client = Groq(api_key=api_key)
+    response = client.chat.completions.create(
+        model=GROQ_MODEL,
+        messages=[{"role": "user", "content": prompt}]
     )
-    return response.text
+    return response.choices[0].message.content
 
 
 # ── RAG 파이프라인 ─────────────────────────────────────────────────────────────
@@ -95,20 +111,20 @@ def rag_query(query: str, verbose: bool = False) -> str:
         return "관련 문서를 찾지 못했습니다. 먼저 ingest.py로 문서를 추가해주세요."
 
     if verbose:
-        print("\n── 검색된 청크 ──")
+        print("\n── 검색된 청크 (reranking 적용) ──")
         for i, c in enumerate(chunks, 1):
-            print(f"  {i}. [{c['doc_id']}] 유사도: {1 - c['distance']:.2%}")
+            print(f"  {i}. [{c['doc_id']}] rerank 점수: {c['rerank_score']:.4f}")
             print(f"     {c['text'][:80]}...")
         print()
 
     prompt = build_prompt(query, chunks)
-    return ask_gemini(prompt)
+    return ask_groq(prompt)               # ← ask_gemini → ask_groq 로 변경
 
 
 # ── 대화형 CLI ─────────────────────────────────────────────────────────────────
 def run_chat():
     print("=" * 50)
-    print("  RAG 챗봇 (ChromaDB + Gemini)")
+    print("  RAG 챗봇 (ChromaDB + Groq)")   # ← 문구 변경
     print("  종료: 'q' 또는 'quit' 입력")
     print("=" * 50)
 
