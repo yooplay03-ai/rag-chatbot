@@ -13,7 +13,7 @@ from sentence_transformers import CrossEncoder
 # ── 설정 ──────────────────────────────────────────────────────────────────────
 CHROMA_PATH = "./chroma_db"
 COLLECTION_NAME = "my_documents"
-EMBED_MODEL = "all-MiniLM-L6-v2"       # ← 누락된 변수 추가
+EMBED_MODEL = "all-MiniLM-L6-v2"
 GROQ_MODEL = "llama-3.3-70b-versatile"
 
 TOP_K = 3
@@ -42,9 +42,15 @@ reranker = CrossEncoder(RERANK_MODEL)
 def retrieve(query: str, top_k: int = TOP_K) -> list[dict]:
     collection = get_collection()
 
+    # 실제 저장된 문서 수 확인 후 candidate_k 조정
+    total = collection.count()
+    n_results = min(CANDIDATE_K, total)
+    if n_results == 0:
+        return []
+
     results = collection.query(
         query_texts=[query],
-        n_results=CANDIDATE_K,
+        n_results=n_results,
         include=["documents", "metadatas", "distances"]
     )
 
@@ -88,7 +94,7 @@ def build_prompt(query: str, context_chunks: list[dict]) -> str:
 
 
 # ── Groq API 호출 ──────────────────────────────────────────────────────────────
-def ask_groq(prompt: str) -> str:          # ← ask_gemini → ask_groq 로 변경
+def ask_groq(prompt: str) -> str:
     api_key = os.environ.get("GROQ_API_KEY")
     if not api_key:
         raise EnvironmentError(
@@ -118,13 +124,13 @@ def rag_query(query: str, verbose: bool = False) -> str:
         print()
 
     prompt = build_prompt(query, chunks)
-    return ask_groq(prompt)               # ← ask_gemini → ask_groq 로 변경
+    return ask_groq(prompt)
 
 
 # ── 대화형 CLI ─────────────────────────────────────────────────────────────────
 def run_chat():
     print("=" * 50)
-    print("  RAG 챗봇 (ChromaDB + Groq)")   # ← 문구 변경
+    print("  RAG 챗봇 (ChromaDB + Groq)")
     print("  종료: 'q' 또는 'quit' 입력")
     print("=" * 50)
 
