@@ -1,7 +1,8 @@
 # RAG 챗봇 (ChromaDB + Groq + Reranking)
 
 > 파이썬으로 만든 RAG(Retrieval-Augmented Generation) 챗봇입니다.
-> ChromaDB에 문서를 저장하고, Reranking으로 검색 품질을 높여 Groq LLaMA가 답변합니다.
+> ChromaDB에 문서를 저장하고, Reranking으로 검색 품질을 높여 Groq의 LLM이 답변합니다.
+> KorQuAD 기반 평가셋으로 검색 품질을 측정하며 개선하고 있습니다.
 
 ---
 
@@ -17,9 +18,51 @@ LLM에 전달하는 전체 파이프라인을 구현했습니다.
   → ChromaDB에서 후보 10개 검색
   → Reranker(bge-reranker-v2-m3)로 재정렬 → 상위 3개 선별
   → 프롬프트 조합 (컨텍스트 + 질문)
-  → Groq LLaMA API 호출
+  → Groq API 호출 (openai/gpt-oss-120b)
   → 답변 출력
 ```
+
+---
+
+## 검색 품질 평가
+
+RAG에서 답이 틀리면 원인이 검색인지 생성인지부터 나눠 봐야 하므로, LLM을 빼고 **검색 단계만** 따로 평가했습니다.
+
+**방법**
+- 질문마다 정답 문단이 정해져 있는 [KorQuAD 1.0](https://huggingface.co/datasets/KorQuAD/squad_kor_v1) 검증 데이터에서 문단 300개와 질문 300개(문단당 1개)를 뽑아 사용
+- 챗봇과 같은 청킹 함수(500자, 겹침 50자)로 문단을 잘라 ChromaDB에 저장
+- 지표
+  - **Hit@3**: 정답 문단이 상위 3개 안에 든 비율. 챗봇이 상위 3개 청크만 LLM에 넘기므로 핵심 지표
+  - **Hit@10**: 후보 10개 안에 든 비율. 리랭커는 이 후보 안에서 순서만 바꾸므로 리랭킹의 상한선
+  - **MRR**: 정답이 몇 번째로 나왔는지까지 반영 (1등 1점, 2등 0.5점, 3등 0.33점 …)
+
+**결과** (Google Colab T4 GPU)
+
+| 실험 | 임베딩 모델 | 리랭킹 | Hit@1 | Hit@3 | Hit@10 | MRR | 질문당 시간 |
+|------|------------|--------|-------|-------|--------|-----|------------|
+| A | all-MiniLM-L6-v2 | X | 1.7% | 3.7% | 7.3% | 0.031 | 1.5ms |
+| B | all-MiniLM-L6-v2 | O | 7.3% | 7.7% | 8.3% | 0.076 | 177ms |
+| C | BAAI/bge-m3 | X | 95.3% | 98.3% | 100% | 0.971 | 6.9ms |
+| D | BAAI/bge-m3 | O | 100% | 100% | 100% | 1.000 | 660ms |
+
+**해석**
+- 기존 영어 임베딩 모델(A)은 한국어 질문에서 정답 문단을 거의 찾지 못했습니다. 다국어 모델 bge-m3로 바꾸자 Hit@3가 3.7%에서 98.3%로 올라, 이 결과를 근거로 챗봇의 임베딩 모델을 교체했습니다.
+- 영어 모델에 리랭킹을 붙여도(B) Hit@3가 7.7%에 그쳤습니다. 후보 10개 안에 정답이 든 경우(Hit@10)가 8% 남짓이라, 순서만 바꾸는 리랭킹으로는 해결할 수 없는 문제였습니다.
+- bge-m3에 리랭킹을 더하면(D) Hit@3가 1.7%p 오르지만 질문당 시간이 약 100배 늘어납니다. 서비스에서는 이 비용을 감수할 가치가 있는지 판단이 필요합니다.
+
+**한계**
+- KorQuAD 질문은 문단을 보고 만들어 단어가 많이 겹치고 문단도 300개뿐이라, 실제 사용자 질문보다 쉬운 평가입니다. C·D가 거의 만점이라 이후 개선(청킹 등)의 차이를 보려면 더 어려운 평가가 필요합니다.
+- 실험마다 색인을 새로 만들고 ChromaDB가 근사 검색(HNSW)을 써서, 같은 임베딩 모델이어도 후보가 조금씩 달라질 수 있습니다. A와 B의 Hit@10 차이(7.3% vs 8.3%, 3문항)는 이 때문으로 보입니다.
+
+```bash
+pip install pandas pyarrow
+python eval_retrieval.py                                  # A
+python eval_retrieval.py --rerank                         # B
+python eval_retrieval.py --embed BAAI/bge-m3              # C
+python eval_retrieval.py --embed BAAI/bge-m3 --rerank     # D
+```
+
+> KorQuAD 데이터는 라이선스(CC BY-ND)에 따라 저장소에 포함하지 않으며, 스크립트 실행 시 내려받습니다.
 
 ---
 
@@ -29,6 +72,7 @@ LLM에 전달하는 전체 파이프라인을 구현했습니다.
 rag_chatbot/
 ├── ingest.py        # 문서 추가 / 삭제 / 조회
 ├── chatbot.py       # RAG 파이프라인 + 대화형 CLI
+├── eval_retrieval.py # 검색 품질 평가 (KorQuAD 기반 Hit@k, MRR)
 ├── README.md        # 프로젝트 설명
 └── chroma_db/       # ChromaDB 로컬 저장소 (자동 생성)
 ```
@@ -104,11 +148,11 @@ delete_all()                # 전체 삭제 (주의)
 |------|------|------|--------|
 | `ingest.py` | `CHUNK_SIZE` | 청크 크기 | 500자 |
 | `ingest.py` | `CHUNK_OVERLAP` | 청크 겹침 | 50자 |
-| `ingest.py` | `EMBED_MODEL` | 임베딩 모델 | all-MiniLM-L6-v2 |
+| `ingest.py`, `chatbot.py` | `EMBED_MODEL` | 임베딩 모델 (두 파일이 같아야 함) | BAAI/bge-m3 |
 | `chatbot.py` | `CANDIDATE_K` | 임베딩 검색 후보 수 | 10 |
 | `chatbot.py` | `TOP_K` | LLM에 전달할 최종 청크 수 | 3 |
 | `chatbot.py` | `RERANK_MODEL` | 리랭킹 모델 | bge-reranker-v2-m3 |
-| `chatbot.py` | `GROQ_MODEL` | LLM 모델 | llama-3.3-70b-versatile |
+| `chatbot.py` | `GROQ_MODEL` | LLM 모델 | openai/gpt-oss-120b |
 
 ---
 
@@ -117,14 +161,16 @@ delete_all()                # 전체 삭제 (주의)
 | 역할 | 라이브러리 |
 |------|-----------|
 | 벡터 DB | ChromaDB |
-| 임베딩 모델 | SentenceTransformers (all-MiniLM-L6-v2) |
+| 임베딩 모델 | SentenceTransformers (BAAI/bge-m3) |
 | 리랭킹 모델 | BAAI/bge-reranker-v2-m3 |
-| LLM | Groq (LLaMA 3.3 70B) |
+| LLM | Groq (openai/gpt-oss-120b) |
 | 언어 | Python 3.10+ |
 
 ---
 
-## Gemini API 한계 및 Groq 전환 이유
+## 외부 LLM API 변화 대응
+
+### Gemini API 한계 및 Groq 전환
 
 개발 초기 Gemini API를 사용했으나 아래 문제로 Groq으로 전환했습니다.
 
@@ -140,26 +186,21 @@ delete_all()                # 전체 삭제 (주의)
 * Quota exceeded for metric: generate_content_free_tier_requests, limit: 0
 ```
 
-**Groq 선택 이유:** 한국에서 정상 작동, 넉넉한 무료 티어, LLaMA 3.3 70B 무료 사용 가능
+**Groq 선택 이유:** 한국에서 정상 작동, 넉넉한 무료 티어
+
+### Groq 모델 지원 종료 대응
+
+Groq가 `llama-3.3-70b-versatile`을 2026년 8월 16일에 지원 종료하면서 `404 model_not_found` 오류가 발생했습니다.
+모델 이름을 `chatbot.py`의 `GROQ_MODEL` 한 곳에서만 관리하고 있어, Groq가 권장하는 대체 모델 `openai/gpt-oss-120b`로 한 줄만 바꿔 대응했습니다.
+([Groq Deprecations](https://console.groq.com/docs/deprecations))
 
 ---
 
 ## 개선 가능한 점
 
-### 1. 한국어 검색 품질 향상 — 임베딩 모델 교체
+> ✅ 완료: 한국어 임베딩 모델 교체 (all-MiniLM-L6-v2 → bge-m3, 결과는 [검색 품질 평가](#검색-품질-평가) 참고)
 
-현재 `all-MiniLM-L6-v2`는 영어 중심 모델이라 한국어 성능이 제한적입니다.
-
-```python
-# ingest.py & chatbot.py 수정
-# 기존
-EMBED_MODEL = "all-MiniLM-L6-v2"
-
-# 개선
-EMBED_MODEL = "BAAI/bge-m3"  # 다국어 지원, 한국어 성능 우수
-```
-
-### 2. 문장 경계 존중 청킹 — RecursiveCharacterTextSplitter 도입
+### 1. 문장 경계 존중 청킹 — RecursiveCharacterTextSplitter 도입
 
 현재 고정 크기로 자르면 문장 중간에서 잘릴 수 있습니다.
 
@@ -179,7 +220,7 @@ splitter = RecursiveCharacterTextSplitter(
 chunks = splitter.split_text(text)
 ```
 
-### 3. 멀티턴 대화 히스토리 유지
+### 2. 멀티턴 대화 히스토리 유지
 
 현재는 매 질문이 독립적으로 처리되어 이전 대화 내용을 기억하지 못합니다.
 
@@ -199,6 +240,11 @@ def ask_groq(prompt: str) -> str:
     chat_history.append({"role": "assistant", "content": answer})
     return answer
 ```
+
+### 3. 평가 고도화
+- 문단 수를 늘려 더 어려운 평가셋으로 청킹 방식별 차이 측정
+- 한 번 검색한 같은 후보로 리랭킹 전후를 함께 비교하도록 스크립트 개선
+- 검색뿐 아니라 LLM 답변 품질까지 평가
 
 ### 4. 기타
 - PDF, DOCX 등 다양한 파일 형식 지원
