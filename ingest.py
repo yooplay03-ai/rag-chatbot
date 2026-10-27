@@ -6,6 +6,7 @@ ingest.py — 문서를 청킹하고 ChromaDB에 저장하는 모듈
 import os
 import chromadb
 from chromadb.utils import embedding_functions
+from chromadb.errors import NotFoundError
 from pathlib import Path
 
 
@@ -14,7 +15,7 @@ CHROMA_PATH = "./chroma_db"
 COLLECTION_NAME = "my_documents"
 CHUNK_SIZE = 500
 CHUNK_OVERLAP = 50
-EMBED_MODEL = "all-MiniLM-L6-v2"
+EMBED_MODEL = "BAAI/bge-m3"
 
 
 # ── ChromaDB 클라이언트 초기화 ──────────────────────────────────────────────
@@ -91,8 +92,12 @@ def delete_document(doc_id: str):
 
 def delete_all():
     client = chromadb.PersistentClient(path=CHROMA_PATH)
-    client.delete_collection(name=COLLECTION_NAME)
-    print(f"[삭제 완료] 컬렉션 '{COLLECTION_NAME}' 전체 삭제")
+    try:
+        client.delete_collection(name=COLLECTION_NAME)
+        print(f"[삭제 완료] 컬렉션 '{COLLECTION_NAME}' 전체 삭제")
+    except NotFoundError:
+        # 처음 실행하는 환경처럼 컬렉션이 아직 없으면 지울 것이 없으므로 넘어간다
+        print(f"[안내] 컬렉션 '{COLLECTION_NAME}'이 없어서 삭제를 건너뜁니다")
 
 
 # ── 조회 ───────────────────────────────────────────────────────────────────────
