@@ -13,8 +13,8 @@ from sentence_transformers import CrossEncoder
 # ── 설정 ──────────────────────────────────────────────────────────────────────
 CHROMA_PATH = "./chroma_db"
 COLLECTION_NAME = "my_documents"
-EMBED_MODEL = "all-MiniLM-L6-v2"
-GROQ_MODEL = "llama-3.3-70b-versatile"
+EMBED_MODEL = "BAAI/bge-m3"
+GROQ_MODEL = "openai/gpt-oss-120b"  # llama-3.3-70b-versatile은 2026-08-16 Groq에서 지원 종료
 
 TOP_K = 3
 CANDIDATE_K = 10
