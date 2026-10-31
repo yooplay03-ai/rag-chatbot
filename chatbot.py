@@ -63,6 +63,7 @@ def retrieve(query: str, top_k: int = TOP_K) -> list[dict]:
         candidates.append({
             "text": doc,
             "doc_id": meta.get("doc_id", "unknown"),
+            "label": meta.get("label", meta.get("doc_id", "unknown")),  # 예: 표준취업규칙 제33조(연차유급휴가)
             "distance": round(dist, 4)
         })
 
@@ -79,7 +80,7 @@ def retrieve(query: str, top_k: int = TOP_K) -> list[dict]:
 # ── 프롬프트 구성 ──────────────────────────────────────────────────────────────
 def build_prompt(query: str, context_chunks: list[dict]) -> str:
     context = "\n\n".join(
-        f"[출처: {c['doc_id']}]\n{c['text']}" for c in context_chunks
+        f"[출처: {c['label']}]\n{c['text']}" for c in context_chunks
     )
     return f"""아래는 참고할 수 있는 문서입니다:
 
@@ -88,7 +89,9 @@ def build_prompt(query: str, context_chunks: list[dict]) -> str:
 ---
 
 위 문서를 참고하여 다음 질문에 답해주세요.
-문서에 없는 내용은 모른다고 말해주세요.
+- 답변 끝에 근거가 된 조항을 [출처]에 적힌 이름 그대로 밝혀주세요. (예: 근거: 표준취업규칙 제33조(연차유급휴가))
+- 문서에 없는 내용은 모른다고 말해주세요.
+- 문서에 '00:00', '○○'처럼 비어 있는 값은 회사가 정해야 하는 부분이라고 안내해주세요.
 
 질문: {query}"""
 
@@ -119,7 +122,7 @@ def rag_query(query: str, verbose: bool = False) -> str:
     if verbose:
         print("\n── 검색된 청크 (reranking 적용) ──")
         for i, c in enumerate(chunks, 1):
-            print(f"  {i}. [{c['doc_id']}] rerank 점수: {c['rerank_score']:.4f}")
+            print(f"  {i}. [{c['label']}] rerank 점수: {c['rerank_score']:.4f}")
             print(f"     {c['text'][:80]}...")
         print()
 
