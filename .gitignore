@@ -7,3 +7,6 @@ __pycache__/
 # 평가 결과물 (KorQuAD 데이터가 들어 있어 재배포하지 않음)
 failures*.csv
 results*.csv
+
+# 원본 문서 (출처에서 직접 내려받아 docs 폴더에 넣기)
+docs/*.hwp
