@@ -3,6 +3,7 @@ ingest.py — 문서를 청킹하고 ChromaDB에 저장하는 모듈
 사용법: python ingest.py   (docs 폴더의 .hwp / .txt 문서를 모두 다시 넣는다)
 """
 
+import json
 import os
 import re
 import chromadb
@@ -11,7 +12,7 @@ from chromadb.errors import NotFoundError
 from pathlib import Path
 
 from hwp_loader import read_hwp_text
-from rules_parser import parse_articles
+from rules_parser import apply_profile, parse_articles
 
 
 # ── 설정 ──────────────────────────────────────────────────────────────────────
@@ -23,6 +24,7 @@ CHUNK_METHOD = "sentence"   # "fixed": 글자 수로 자르기 / "sentence": 문
 MIN_CHUNK_LEN = 100         # sentence 방식에서 이보다 짧은 꼬리는 앞 청크에 합침
 EMBED_MODEL = "BAAI/bge-m3"
 DOCS_DIR = "./docs"
+PROFILE_PATH = "./company_profile.json"   # 표준안 빈칸을 채울 가상 회사 설정 (없으면 원본 그대로)
 ARTICLE_MAX_LEN = 800       # 조항이 이보다 길면 문장 단위로 나눔
 
 
@@ -117,10 +119,13 @@ def add_document(text: str, doc_id: str, metadata: dict = None):
     print(f"[추가 완료] '{doc_id}' → {len(chunks)}개 청크 저장")
 
 
-def add_rules_document(path: str, doc_name: str):
+def add_rules_document(path: str, doc_name: str, profile: dict = None):
     """취업규칙 같은 규정 문서를 조항 단위로 넣는다. 청크마다 조항 정보를 메타데이터로 붙인다."""
     text = read_hwp_text(path) if path.endswith(".hwp") else Path(path).read_text(encoding="utf-8")
     articles = parse_articles(text, doc_name)
+    if profile:
+        articles = apply_profile(articles, profile)
+        doc_name = profile.get("doc_name", doc_name)
 
     ids, chunks, metas = [], [], []
     for i, a in enumerate(articles):
@@ -213,10 +218,15 @@ if __name__ == "__main__":
     if not files:
         print(f"[안내] '{DOCS_DIR}' 폴더에 .hwp 또는 .txt 문서를 넣어 주세요.")
 
+    profile = None
+    if Path(PROFILE_PATH).exists():
+        profile = json.loads(Path(PROFILE_PATH).read_text(encoding="utf-8"))
+        print(f"[안내] 회사 설정 적용: {profile.get('company_name')} ({len(profile.get('edits', []))}개 문장 교체)")
+
     for file in files:
         name = re.sub(r"\(.*?\)", "", file.stem).strip()   # "표준취업규칙(2026년, 배포)" → "표준취업규칙"
         if file.suffix == ".hwp":
-            add_rules_document(str(file), doc_name=name)
+            add_rules_document(str(file), doc_name=name, profile=profile)
         else:
             add_document(file.read_text(encoding="utf-8"), doc_id=name, metadata={"source": str(file)})
 

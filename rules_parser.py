@@ -68,6 +68,28 @@ def parse_articles(text: str, doc_name: str = "취업규칙") -> list[dict]:
     return results
 
 
+def apply_profile(articles: list[dict], profile: dict) -> list[dict]:
+    """표준안의 빈칸을 회사 설정(company_profile.json) 값으로 채운다.
+    - replace_all: 모든 조항에서 바꿀 말 (예: ○○주식회사 → 하늘테크 주식회사)
+    - edits: 조항별로 원래 문장(find)을 새 문장(replace)으로 교체
+    """
+    doc_name = profile.get("doc_name")
+    for a in articles:
+        for old, new in profile.get("replace_all", {}).items():
+            a["text"] = a["text"].replace(old, new)
+        if doc_name:
+            a["label"] = f"{doc_name} {a['article']}({a['title']})"
+
+    for edit in profile.get("edits", []):
+        targets = [a for a in articles if a["article"] == edit["article"] and edit["find"] in a["text"]]
+        if not targets:
+            print(f"[경고] {edit['article']}에서 바꿀 문장을 찾지 못했습니다: {edit['find'][:30]}…")
+            continue
+        for a in targets:
+            a["text"] = a["text"].replace(edit["find"], edit["replace"])
+    return articles
+
+
 if __name__ == "__main__":
     import sys
     from hwp_loader import read_hwp_text
