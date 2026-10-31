@@ -16,7 +16,7 @@ CHROMA_PATH = "./chroma_db"
 COLLECTION_NAME = "my_documents"
 CHUNK_SIZE = 500
 CHUNK_OVERLAP = 50
-CHUNK_METHOD = "fixed"      # "fixed": 글자 수로 자르기 / "sentence": 문장 경계에서 자르기
+CHUNK_METHOD = "sentence"   # "fixed": 글자 수로 자르기 / "sentence": 문장 경계에서 자르기 (README 실험 2 근거)
 MIN_CHUNK_LEN = 100         # sentence 방식에서 이보다 짧은 꼬리는 앞 청크에 합침
 EMBED_MODEL = "BAAI/bge-m3"
 
