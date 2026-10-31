@@ -4,6 +4,7 @@ ingest.py — 문서를 청킹하고 ChromaDB에 저장하는 모듈
 """
 
 import os
+import re
 import chromadb
 from chromadb.utils import embedding_functions
 from chromadb.errors import NotFoundError
@@ -15,6 +16,8 @@ CHROMA_PATH = "./chroma_db"
 COLLECTION_NAME = "my_documents"
 CHUNK_SIZE = 500
 CHUNK_OVERLAP = 50
+CHUNK_METHOD = "fixed"      # "fixed": 글자 수로 자르기 / "sentence": 문장 경계에서 자르기
+MIN_CHUNK_LEN = 100         # sentence 방식에서 이보다 짧은 꼬리는 앞 청크에 합침
 EMBED_MODEL = "BAAI/bge-m3"
 
 
@@ -45,10 +48,57 @@ def chunk_text(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVE
     return chunks
 
 
+SENT_SPLIT = re.compile(r"(?<=[.!?])\s+|\n+")  # 마침표·물음표·느낌표 뒤 공백, 또는 줄바꿈
+
+
+def split_sentences(text: str) -> list[str]:
+    return [s.strip() for s in SENT_SPLIT.split(text) if s.strip()]
+
+
+def chunk_by_sentence(text: str, chunk_size: int = CHUNK_SIZE,
+                      overlap_sents: int = 1, min_len: int = MIN_CHUNK_LEN) -> list[str]:
+    """문장을 chunk_size 안에서 최대한 모아 청크를 만든다.
+    - 문장 중간에서 자르지 않는다 (한 문장이 chunk_size보다 길 때만 예외)
+    - 앞 청크의 마지막 문장 overlap_sents개를 다음 청크 앞에 겹쳐 문맥을 잇는다
+    - 마지막에 남은 꼬리가 min_len보다 짧으면 따로 두지 않고 앞 청크에 붙인다
+    """
+    pieces = []
+    for sent in split_sentences(text):
+        if len(sent) > chunk_size:   # 너무 긴 문장은 어쩔 수 없이 글자 수로 자름
+            pieces.extend(chunk_text(sent, chunk_size, CHUNK_OVERLAP))
+        else:
+            pieces.append(sent)
+
+    chunks, cur, n_new = [], [], 0   # n_new: cur 안에서 겹침이 아닌 새 문장 수
+    for sent in pieces:
+        if n_new > 0 and len(" ".join(cur + [sent])) > chunk_size:
+            chunks.append(" ".join(cur))
+            tail = cur[-overlap_sents:] if overlap_sents else []
+            # 겹칠 문장이 너무 길면 청크가 커지므로 겹치지 않는다
+            cur = tail if len(" ".join(tail)) <= chunk_size // 2 else []
+            n_new = 0
+        cur.append(sent)
+        n_new += 1
+
+    if n_new > 0:
+        new_part = " ".join(cur[-n_new:])
+        if chunks and len(new_part) < min_len:
+            chunks[-1] += " " + new_part     # 짧은 꼬리는 앞 청크에 합치기
+        else:
+            chunks.append(" ".join(cur))
+    return chunks
+
+
+def make_chunks(text: str, method: str = CHUNK_METHOD) -> list[str]:
+    if method == "sentence":
+        return chunk_by_sentence(text)
+    return chunk_text(text)
+
+
 # ── 데이터 추가 ────────────────────────────────────────────────────────────────
 def add_document(text: str, doc_id: str, metadata: dict = None):
     collection = get_collection()
-    chunks = chunk_text(text)
+    chunks = make_chunks(text)
 
     if not chunks:
         print(f"[경고] 청크가 없습니다: {doc_id}")
