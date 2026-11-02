@@ -17,7 +17,8 @@ COPY --chown=user requirements.txt .
 RUN pip install --no-cache-dir --user -r requirements.txt
 
 COPY --chown=user . .
-# docs 폴더의 취업규칙을 DB에 넣고(임베딩 모델도 이때 내려받음), 리랭커 모델도 미리 받아 둔다
+# 취업규칙 가공본(data/haneul_rules.json)을 DB에 넣고(임베딩 모델도 이때 내려받음), 리랭커 모델도 미리 받아 둔다
+# 원본 HWP는 올리지 않는다. ingest.py는 docs에 .hwp가 없으면 가공본을 쓴다.
 RUN python ingest.py && \
     python -c "from sentence_transformers import CrossEncoder; CrossEncoder('BAAI/bge-reranker-v2-m3')"
 

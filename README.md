@@ -191,13 +191,16 @@ rag_chatbot/
 ├── hwp_loader.py      # 한글(.hwp) 문서 본문 추출
 ├── rules_parser.py    # 규정 문서를 조항 단위로 분리, 작성 해설 제외, 회사 설정 적용
 ├── company_profile.json # 가상 회사(하늘테크) 설정: 표준안 빈칸을 채울 값
+├── data/haneul_rules.json # 조항 가공본 (원본 HWP 없이 DB를 만들 때·배포할 때 사용)
 ├── chatbot.py         # RAG 파이프라인 + 대화형 CLI
 ├── api.py             # FastAPI 서버 (/ask, /health, 채팅 화면)
 ├── static/index.html  # 브라우저용 채팅 화면
 ├── tests/test_api.py  # API 테스트 (pytest)
 ├── eval_retrieval.py  # 검색 품질 평가 (KorQuAD 기반 Hit@k, MRR)
 ├── bench_rerank.py    # 리랭킹 후보 수·길이별 속도와 결과 비교
-├── Dockerfile         # 배포용 컨테이너 설정
+├── Dockerfile         # 배포용 컨테이너 설정 (Hugging Face Spaces)
+├── deploy_space.py    # Spaces에 배포할 파일만 골라 올리기
+├── space/README.md    # Space 설정과 소개
 ├── requirements.txt   # 필요한 패키지
 ├── README.md          # 프로젝트 설명
 ├── docs/              # 넣을 문서 (.hwp / .txt) — 원본은 저장소에 포함하지 않음
@@ -229,6 +232,10 @@ export GROQ_API_KEY=gsk_여기에키입력
 ```
 
 ### 2단계 — 문서 준비 및 추가
+
+> 원본 HWP가 없어도 됩니다. `docs`에 .hwp가 없으면 `python ingest.py`가 저장소에 포함된 가공본(`data/haneul_rules.json`)으로 같은 DB(조항 99개, 청크 102개)를 만듭니다.
+> 원본 파일은 고용노동부 배포 파일이라 저장소와 배포 서버에 올리지 않고, 가상 회사 값으로 채운 조항 텍스트만 올렸습니다.
+> 원본으로 가공본을 다시 만들려면 아래 1~2를 한 뒤 `python ingest.py --export`를 실행합니다.
 
 1. 고용노동부 [2026년 표준 취업규칙 게시글](https://www.moel.go.kr/policy/policydata/view.do?bbs_seq=20260200740)에서 `표준취업규칙(2026년, 배포).hwp`를 내려받습니다.
 2. 프로젝트 안에 `docs` 폴더를 만들고 파일을 넣습니다.

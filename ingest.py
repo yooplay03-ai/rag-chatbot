@@ -1,11 +1,17 @@
 """
 ingest.py — 문서를 청킹하고 ChromaDB에 저장하는 모듈
-사용법: python ingest.py   (docs 폴더의 .hwp / .txt 문서를 모두 다시 넣는다)
+사용법:
+  python ingest.py            docs 폴더의 .hwp / .txt 문서를 모두 다시 넣는다.
+                              docs에 .hwp가 없으면 data/haneul_rules.json(가공본)을 넣는다.
+  python ingest.py --export   .hwp를 조항으로 나누고 회사 설정을 적용한 결과를 data/haneul_rules.json으로 저장한다.
+
+원본 HWP(고용노동부 배포 파일)는 저장소에 올리지 않는다. 배포 서버는 가상 회사 값으로 채운
+조항 텍스트(가공본)만으로 DB를 만든다.
 """
 
 import json
-import os
 import re
+import sys
 import chromadb
 from chromadb.utils import embedding_functions
 from chromadb.errors import NotFoundError
@@ -26,6 +32,7 @@ EMBED_MODEL = "BAAI/bge-m3"
 DOCS_DIR = "./docs"
 PROFILE_PATH = "./company_profile.json"   # 표준안 빈칸을 채울 가상 회사 설정 (없으면 원본 그대로)
 ARTICLE_MAX_LEN = 800       # 조항이 이보다 길면 문장 단위로 나눔
+RULES_JSON = "./data/haneul_rules.json"   # 조항 가공본 (원본 HWP 대신 배포에 사용)
 
 
 # ── ChromaDB 클라이언트 초기화 ──────────────────────────────────────────────
@@ -119,14 +126,42 @@ def add_document(text: str, doc_id: str, metadata: dict = None):
     print(f"[추가 완료] '{doc_id}' → {len(chunks)}개 청크 저장")
 
 
-def add_rules_document(path: str, doc_name: str, profile: dict = None):
-    """취업규칙 같은 규정 문서를 조항 단위로 넣는다. 청크마다 조항 정보를 메타데이터로 붙인다."""
+def load_rule_articles(path: str, doc_name: str, profile: dict = None) -> tuple[list[dict], str]:
+    """규정 문서를 읽어 조항 목록으로 만들고, 회사 설정이 있으면 빈칸을 채운다."""
     text = read_hwp_text(path) if path.endswith(".hwp") else Path(path).read_text(encoding="utf-8")
     articles = parse_articles(text, doc_name)
     if profile:
         articles = apply_profile(articles, profile)
         doc_name = profile.get("doc_name", doc_name)
+    return articles, doc_name
 
+
+def add_rules_document(path: str, doc_name: str, profile: dict = None):
+    """취업규칙 같은 규정 문서를 조항 단위로 넣는다."""
+    articles, doc_name = load_rule_articles(path, doc_name, profile)
+    add_articles(articles, doc_name)
+
+
+def export_rules(path: str, doc_name: str, profile: dict = None, out: str = RULES_JSON):
+    """조항 가공본을 JSON으로 저장한다. 원본 파일 없이도 같은 DB를 만들 수 있게 하기 위해서다."""
+    articles, doc_name = load_rule_articles(path, doc_name, profile)
+    data = {
+        "doc_name": doc_name,
+        "source": "고용노동부 2026년 표준취업규칙(일반 근로자용 본문)을 바탕으로 만든 가상 회사의 취업규칙 (데모용)",
+        "articles": articles,
+    }
+    Path(out).parent.mkdir(parents=True, exist_ok=True)
+    Path(out).write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+    print(f"[저장 완료] {out} → 조항 {len(articles)}개")
+
+
+def add_rules_from_json(path: str = RULES_JSON):
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    add_articles(data["articles"], data["doc_name"])
+
+
+def add_articles(articles: list[dict], doc_name: str):
+    """조항 목록을 청크로 만들어 저장한다. 청크마다 조항 정보를 메타데이터로 붙인다."""
     ids, chunks, metas = [], [], []
     for i, a in enumerate(articles):
         if len(a["text"]) <= ARTICLE_MAX_LEN:
@@ -209,19 +244,30 @@ def list_documents():
 
 # ── 직접 실행: docs 폴더 문서 넣기 ──────────────────────────────────────────────────
 if __name__ == "__main__":
-
-    # 기존 데이터 초기화
-    delete_all()
-
     folder = Path(DOCS_DIR)
-    files = sorted(folder.glob("*.hwp")) + sorted(folder.glob("*.txt"))
-    if not files:
-        print(f"[안내] '{DOCS_DIR}' 폴더에 .hwp 또는 .txt 문서를 넣어 주세요.")
+    hwp_files = sorted(folder.glob("*.hwp"))
+    files = hwp_files + sorted(folder.glob("*.txt"))
 
     profile = None
     if Path(PROFILE_PATH).exists():
         profile = json.loads(Path(PROFILE_PATH).read_text(encoding="utf-8"))
         print(f"[안내] 회사 설정 적용: {profile.get('company_name')} ({len(profile.get('edits', []))}개 문장 교체)")
+
+    if "--export" in sys.argv:
+        if not hwp_files:
+            sys.exit(f"[오류] '{DOCS_DIR}' 폴더에 .hwp 파일이 없습니다.")
+        name = re.sub(r"\(.*?\)", "", hwp_files[0].stem).strip()
+        export_rules(str(hwp_files[0]), doc_name=name, profile=profile)
+        sys.exit(0)
+
+    # 기존 데이터 초기화
+    delete_all()
+
+    if not hwp_files and Path(RULES_JSON).exists():
+        print(f"[안내] 원본 .hwp가 없어 가공본 {RULES_JSON}을 넣습니다.")
+        add_rules_from_json()
+    elif not files:
+        print(f"[안내] '{DOCS_DIR}' 폴더에 .hwp 또는 .txt 문서를 넣어 주세요.")
 
     for file in files:
         name = re.sub(r"\(.*?\)", "", file.stem).strip()   # "표준취업규칙(2026년, 배포)" → "표준취업규칙"
