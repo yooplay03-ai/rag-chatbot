@@ -1,4 +1,8 @@
 venv/
+.pytest_cache/
+
+# 데모 녹화 원본 (README에는 assets/demo.gif를 사용)
+demo.mp4
 chroma_db/
 __pycache__/
 *.pyc
