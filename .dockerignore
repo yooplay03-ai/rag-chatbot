@@ -1,0 +1,7 @@
+chroma_db/
+__pycache__/
+.cache/
+.git/
+venv/
+failures*.csv
+results*.csv

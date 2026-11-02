@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>하늘테크 사내 규정 챗봇</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --text: #1d2330; --muted: #667085;
+    --line: #e4e7ec; --accent: #3557d6; --accent-soft: #e8edff; --err: #b42318;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0f1218; --card: #171b24; --text: #e7e9ee; --muted: #98a2b3;
+            --line: #2a303c; --accent: #7c96ff; --accent-soft: #1f2840; --err: #f97066; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font-family: "Pretendard", "Noto Sans KR", system-ui, sans-serif; line-height: 1.6; }
+  main { max-width: 760px; margin: 0 auto; padding: 32px 16px 120px; }
+  h1 { font-size: 1.4rem; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: .92rem; margin: 0 0 20px; }
+  .note { background: var(--accent-soft); border-radius: 10px; padding: 10px 14px; font-size: .85rem; color: var(--muted); }
+  .examples { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0 24px; }
+  .examples button { border: 1px solid var(--line); background: var(--card); color: var(--text);
+                     border-radius: 999px; padding: 6px 12px; font-size: .85rem; cursor: pointer; }
+  .examples button:hover { border-color: var(--accent); }
+  .msg { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; margin-bottom: 12px; }
+  .msg.q { background: var(--accent-soft); border-color: transparent; }
+  .msg .who { font-size: .75rem; color: var(--muted); margin-bottom: 4px; }
+  .msg.err { color: var(--err); }
+  .answer { white-space: pre-wrap; }
+  details { margin-top: 10px; font-size: .85rem; }
+  summary { cursor: pointer; color: var(--accent); }
+  .src { border-top: 1px solid var(--line); padding: 8px 0; }
+  .src b { display: block; }
+  .src span { color: var(--muted); }
+  .time { font-size: .75rem; color: var(--muted); margin-top: 6px; }
+  form { position: fixed; left: 0; right: 0; bottom: 0; background: var(--bg); border-top: 1px solid var(--line); }
+  .bar { max-width: 760px; margin: 0 auto; padding: 12px 16px; display: flex; gap: 8px; }
+  input { flex: 1; min-width: 0; border: 1px solid var(--line); background: var(--card); color: var(--text);
+          border-radius: 10px; padding: 12px 14px; font-size: 1rem; }
+  form button { border: 0; background: var(--accent); color: #fff; border-radius: 10px; padding: 0 18px; font-size: 1rem; cursor: pointer; }
+  form button:disabled { opacity: .5; cursor: wait; }
+</style>
+</head>
+<body>
+<main>
+  <h1>하늘테크 사내 규정 챗봇</h1>
+  <p class="sub">취업규칙을 검색해 근거 조항과 함께 답합니다.</p>
+  <div class="note">데모용 가상 회사 "하늘테크 주식회사"의 취업규칙입니다. 고용노동부 2026년 표준취업규칙을 바탕으로 만들었습니다.</div>
+
+  <div class="examples">
+    <button type="button">여름휴가는 며칠이야?</button>
+    <button type="button">월급날이 언제야?</button>
+    <button type="button">입사 1년 안 됐는데 연차가 있어?</button>
+    <button type="button">직장 내 괴롭힘을 당하면 어떻게 해야 해?</button>
+  </div>
+
+  <div id="log"></div>
+</main>
+
+<form id="f">
+  <div class="bar">
+    <input id="q" placeholder="취업규칙에 대해 물어보세요" maxlength="500" autocomplete="off">
+    <button id="send">보내기</button>
+  </div>
+</form>
+
+<script>
+const log = document.getElementById('log');
+const input = document.getElementById('q');
+const send = document.getElementById('send');
+
+const esc = s => s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fmt = s => esc(s)
+  .replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')
+  .replace(/(^|[^*])\*(?!\s)([^*\n]+?)\*(?!\*)/g, '$1<i>$2</i>');
+
+function add(cls, who, html) {
+  const div = document.createElement('div');
+  div.className = 'msg ' + cls;
+  div.innerHTML = `<div class="who">${who}</div>${html}`;
+  log.appendChild(div);
+  div.scrollIntoView({behavior: 'smooth', block: 'end'});
+  return div;
+}
+
+async function ask(question) {
+  add('q', '나', `<div class="answer">${esc(question)}</div>`);
+  const pending = add('a', '챗봇', '<div class="answer">조항을 찾는 중…</div>');
+  send.disabled = true;
+  try {
+    const res = await fetch('/ask', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({question})
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(typeof data.detail === 'string' ? data.detail : '요청이 올바르지 않습니다.');
+    const sources = data.sources.map(s =>
+      `<div class="src"><b>${esc(s.label)}</b><span>리랭크 점수 ${s.rerank_score.toFixed(3)}</span><br>${esc(s.text.length > 160 ? s.text.slice(0, 160) + '…' : s.text)}</div>`
+    ).join('');
+    pending.innerHTML = `<div class="who">챗봇</div><div class="answer">${fmt(data.answer)}</div>`
+      + (sources ? `<details><summary>검색된 조항 ${data.sources.length}개 보기</summary>${sources}</details>` : '')
+      + `<div class="time">임베딩 검색 ${Math.round(data.timings_ms.search)}ms · 리랭킹 ${Math.round(data.timings_ms.rerank)}ms · 답변 생성 ${Math.round(data.timings_ms.llm)}ms</div>`;
+  } catch (e) {
+    pending.classList.add('err');
+    pending.innerHTML = `<div class="who">오류</div>${esc(e.message)}`;
+  } finally {
+    send.disabled = false;
+  }
+}
+
+document.getElementById('f').addEventListener('submit', e => {
+  e.preventDefault();
+  const q = input.value.trim();
+  if (!q || send.disabled) return;
+  input.value = '';
+  ask(q);
+});
+document.querySelectorAll('.examples button').forEach(b =>
+  b.addEventListener('click', () => { if (!send.disabled) ask(b.textContent); })
+);
+</script>
+</body>
+</html>
