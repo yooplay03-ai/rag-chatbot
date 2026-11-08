@@ -14,6 +14,7 @@
             --line: #2a303c; --accent: #7c96ff; --accent-soft: #1f2840; --err: #f97066; }
   }
   * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
   body { margin: 0; background: var(--bg); color: var(--text);
          font-family: "Pretendard", "Noto Sans KR", system-ui, sans-serif; line-height: 1.6; }
   main { max-width: 760px; margin: 0 auto; padding: 32px 16px 120px; }
@@ -41,6 +42,14 @@
           border-radius: 10px; padding: 12px 14px; font-size: 1rem; }
   form button { border: 0; background: var(--accent); color: #fff; border-radius: 10px; padding: 0 18px; font-size: 1rem; cursor: pointer; }
   form button:disabled { opacity: .5; cursor: wait; }
+  .login { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; margin: 16px 0; }
+  .login .row { display: flex; gap: 8px; flex-wrap: wrap; }
+  .login input { flex: 1 1 140px; padding: 9px 12px; font-size: .95rem; }
+  .login button { border: 0; background: var(--accent); color: #fff; border-radius: 10px; padding: 0 16px; font-size: .95rem; cursor: pointer; }
+  .login .hint { font-size: .8rem; color: var(--muted); margin-top: 6px; }
+  .login .msgerr { font-size: .85rem; color: var(--err); margin-top: 6px; }
+  .whoami { display: flex; justify-content: space-between; align-items: center; font-size: .9rem; margin: 16px 0; }
+  .whoami button { border: 1px solid var(--line); background: var(--card); color: var(--text); border-radius: 999px; padding: 4px 12px; cursor: pointer; }
 </style>
 </head>
 <body>
@@ -48,6 +57,20 @@
   <h1>하늘테크 사내 규정 챗봇</h1>
   <p class="sub">취업규칙을 검색해 근거 조항과 함께 답합니다.</p>
   <div class="note">데모용 가상 회사 "하늘테크 주식회사"의 취업규칙입니다. 고용노동부 2026년 표준취업규칙을 바탕으로 만들었습니다.</div>
+
+  <div class="login" id="loginBox">
+    <div class="row">
+      <input id="user" placeholder="아이디" autocomplete="username">
+      <input id="pw" type="password" placeholder="비밀번호" autocomplete="current-password">
+      <button type="button" id="loginBtn">로그인</button>
+    </div>
+    <div class="hint">직원만 질문할 수 있습니다. 데모 계정: employee / demo1234 (개발팀), hr / demo1234 (인사팀)</div>
+    <div class="msgerr" id="loginErr"></div>
+  </div>
+  <div class="whoami" id="whoami" hidden>
+    <span id="whoText"></span>
+    <button type="button" id="logoutBtn">로그아웃</button>
+  </div>
 
   <div class="examples">
     <button type="button">여름휴가는 며칠이야?</button>
@@ -71,6 +94,36 @@ const log = document.getElementById('log');
 const input = document.getElementById('q');
 const send = document.getElementById('send');
 
+// 토큰은 페이지 메모리에만 둔다. 새로고침하면 다시 로그인한다.
+let token = null;
+const loginBox = document.getElementById('loginBox');
+const whoami = document.getElementById('whoami');
+
+function setLoggedIn(data) {
+  token = data ? data.token : null;
+  loginBox.hidden = !!data;
+  whoami.hidden = !data;
+  if (data) document.getElementById('whoText').textContent = `${data.user} (${data.dept})님으로 로그인됨`;
+}
+
+document.getElementById('loginBtn').addEventListener('click', async () => {
+  const err = document.getElementById('loginErr');
+  err.textContent = '';
+  const res = await fetch('/login', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({username: document.getElementById('user').value.trim(),
+                          password: document.getElementById('pw').value})
+  });
+  const data = await res.json();
+  if (!res.ok) { err.textContent = typeof data.detail === 'string' ? data.detail : '아이디와 비밀번호를 입력해 주세요.'; return; }
+  document.getElementById('pw').value = '';
+  setLoggedIn(data);
+});
+document.getElementById('pw').addEventListener('keydown', e => {
+  if (e.key === 'Enter') document.getElementById('loginBtn').click();
+});
+document.getElementById('logoutBtn').addEventListener('click', () => setLoggedIn(null));
+
 const esc = s => s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmt = s => esc(s)
   .replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')
@@ -86,15 +139,18 @@ function add(cls, who, html) {
 }
 
 async function ask(question) {
+  if (!token) { document.getElementById('loginErr').textContent = '먼저 로그인해 주세요.'; return; }
   add('q', '나', `<div class="answer">${esc(question)}</div>`);
   const pending = add('a', '챗봇', '<div class="answer">조항을 찾는 중…</div>');
   send.disabled = true;
   try {
     const res = await fetch('/ask', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'Authorization': `Bearer ${token}`},
       body: JSON.stringify({question})
     });
     const data = await res.json();
+    if (res.status === 401) setLoggedIn(null);   // 만료되거나 잘못된 토큰이면 다시 로그인
     if (!res.ok) throw new Error(typeof data.detail === 'string' ? data.detail : '요청이 올바르지 않습니다.');
     const sources = data.sources.map(s =>
       `<div class="src"><b>${esc(s.label)}</b><span>리랭크 점수 ${s.rerank_score.toFixed(3)}</span><br>${esc(s.text.length > 160 ? s.text.slice(0, 160) + '…' : s.text)}</div>`

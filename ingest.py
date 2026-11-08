@@ -18,6 +18,7 @@ from chromadb.errors import NotFoundError
 from pathlib import Path
 
 from hwp_loader import read_hwp_text
+from security import access_for
 from rules_parser import apply_profile, parse_articles
 
 
@@ -119,7 +120,7 @@ def add_document(text: str, doc_id: str, metadata: dict = None):
         return
 
     ids = [f"{doc_id}_{i}" for i in range(len(chunks))]
-    metas = [{**(metadata or {}), "doc_id": doc_id, "chunk_index": i}
+    metas = [{**(metadata or {}), "doc_id": doc_id, "chunk_index": i, "access": access_for(doc_id)}
              for i in range(len(chunks))]
 
     collection.add(documents=chunks, ids=ids, metadatas=metas)
@@ -176,6 +177,7 @@ def add_articles(articles: list[dict], doc_name: str):
             metas.append({
                 "doc_id": doc_name, "label": a["label"], "article": a["article"],
                 "title": a["title"], "chapter": a["chapter"], "chunk_index": j,
+                "access": access_for(doc_name),   # 열람 권한 (security.py)
             })
 
     collection = get_collection()

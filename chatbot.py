@@ -10,6 +10,8 @@ from functools import lru_cache
 import chromadb
 from chromadb.utils import embedding_functions
 
+from security import PUBLIC, mask_pii
+
 
 # ── 설정 ──────────────────────────────────────────────────────────────────────
 CHROMA_PATH = "./chroma_db"
@@ -57,12 +59,14 @@ def get_groq_client():
 
 
 # ── 관련 문서 검색 + Reranking ─────────────────────────────────────────────────
-def retrieve(query: str, top_k: int = TOP_K) -> list[dict]:
-    return rerank(query, search_candidates(query), top_k)
+def retrieve(query: str, top_k: int = TOP_K, allowed: list[str] | None = None) -> list[dict]:
+    return rerank(query, search_candidates(query, allowed), top_k)
 
 
-def search_candidates(query: str) -> list[dict]:
-    """1단계: bge-m3로 질문을 벡터로 바꾸고, ChromaDB에서 가까운 조항 CANDIDATE_K개를 찾는다."""
+def search_candidates(query: str, allowed: list[str] | None = None) -> list[dict]:
+    """1단계: bge-m3로 질문을 벡터로 바꾸고, ChromaDB에서 가까운 조항 CANDIDATE_K개를 찾는다.
+    allowed: 볼 수 있는 열람 권한 목록. 이 권한이 붙은 조항만 검색한다(기본은 전 직원 공개 문서만)."""
+    allowed = allowed or [PUBLIC]
     collection = get_collection()
 
     # 실제 저장된 문서 수 확인 후 candidate_k 조정
@@ -74,6 +78,7 @@ def search_candidates(query: str) -> list[dict]:
     results = collection.query(
         query_texts=[query],
         n_results=n_results,
+        where={"access": {"$in": allowed}},   # 권한 없는 조항은 후보에도 오르지 않는다
         include=["documents", "metadatas", "distances"]
     )
 
@@ -139,18 +144,19 @@ def ask_groq(prompt: str) -> str:
 NO_DOCS_MESSAGE = "관련 문서를 찾지 못했습니다. 먼저 ingest.py로 문서를 추가해주세요."
 
 
-def answer_question(query: str) -> dict:
-    """답변, 근거 청크, 단계별 걸린 시간(ms)을 함께 돌려준다. CLI와 API가 같이 쓴다."""
+def answer_question(query: str, allowed: list[str] | None = None) -> dict:
+    """답변, 근거 청크, 단계별 걸린 시간(ms)을 함께 돌려준다. CLI와 API가 같이 쓴다.
+    검색·리랭킹은 서버 안에서 원문으로 하고, 외부 LLM에는 민감정보를 가린 질문만 보낸다."""
     ms = lambda a, b: round((b - a) * 1000, 1)
     t0 = time.perf_counter()
-    candidates = search_candidates(query)
+    candidates = search_candidates(query, allowed)
     t1 = time.perf_counter()
     chunks = rerank(query, candidates)
     t2 = time.perf_counter()
     if not chunks:
         return {"answer": NO_DOCS_MESSAGE, "sources": [],
                 "timings_ms": {"search": ms(t0, t1), "rerank": ms(t1, t2), "llm": 0.0}}
-    answer = ask_groq(build_prompt(query, chunks))
+    answer = ask_groq(build_prompt(mask_pii(query), chunks))
     t3 = time.perf_counter()
     return {
         "answer": answer,
