@@ -59,6 +59,31 @@ def get_groq_client():
 
 
 # ── 관련 문서 검색 + Reranking ─────────────────────────────────────────────────
+# ── 평소 말 → 규정 용어 ────────────────────────────────────────────────────────
+# 직원은 "야근", "보너스"라고 묻고 규정은 "연장근로", "상여금"이라고 쓴다.
+# 도메인 평가셋(eval_answers.py)에서 "야근하면 수당 더 줘요?"가 제29조(연장·야간 및 휴일근로)를 못 찾은 것을 보고 만들었다.
+# 검색·리랭킹에만 쓰고, LLM에는 사용자가 쓴 질문 그대로 보낸다.
+TERM_DICT = {
+    "야근": "연장근로 야간근로 가산",
+    "보너스": "상여금",
+    "월급": "임금 지급",
+    "급여": "임금",
+    "점심시간": "휴게시간",
+    "퇴사": "퇴직 사직원",
+    "그만두": "퇴직 사직원",
+    "와이프": "배우자",
+    "아내": "배우자",
+    "남편": "배우자",
+    "알바": "단시간",
+    "1년 안": "계속하여 근로한 기간이 1년 미만 연차유급휴가",
+}
+
+
+def expand_query(query: str) -> str:
+    extra = [terms for word, terms in TERM_DICT.items() if word in query]
+    return f"{query} ({' '.join(extra)})" if extra else query
+
+
 def retrieve(query: str, top_k: int = TOP_K, allowed: list[str] | None = None) -> list[dict]:
     return rerank(query, search_candidates(query, allowed), top_k)
 
@@ -67,6 +92,7 @@ def search_candidates(query: str, allowed: list[str] | None = None) -> list[dict
     """1단계: bge-m3로 질문을 벡터로 바꾸고, ChromaDB에서 가까운 조항 CANDIDATE_K개를 찾는다.
     allowed: 볼 수 있는 열람 권한 목록. 이 권한이 붙은 조항만 검색한다(기본은 전 직원 공개 문서만)."""
     allowed = allowed or [PUBLIC]
+    query = expand_query(query)
     collection = get_collection()
 
     # 실제 저장된 문서 수 확인 후 candidate_k 조정
@@ -101,6 +127,7 @@ def rerank(query: str, candidates: list[dict], top_k: int = TOP_K) -> list[dict]
     """2단계: 리랭커가 질문과 조항을 함께 읽고 점수를 매겨 상위 top_k개만 남긴다."""
     if not candidates:
         return []
+    query = expand_query(query)
     pairs = [[query, c["text"]] for c in candidates]
     scores = get_reranker().predict(pairs)
 
@@ -108,7 +135,14 @@ def rerank(query: str, candidates: list[dict], top_k: int = TOP_K) -> list[dict]
         c["rerank_score"] = round(float(score), 4)
 
     reranked = sorted(candidates, key=lambda x: x["rerank_score"], reverse=True)
-    return reranked[:top_k]
+    # 긴 조항은 두 조각으로 저장되므로, 같은 조항이 상위 자리를 두 번 차지하지 않게 가장 높은 조각만 남긴다.
+    # (평가셋에서 상위 3개 중 2개가 제35조 조각이라 정답 제33조가 밀려난 사례가 있었다)
+    seen, unique = set(), []
+    for c in reranked:
+        if c["label"] not in seen:
+            seen.add(c["label"])
+            unique.append(c)
+    return unique[:top_k]
 
 
 # ── 프롬프트 구성 ──────────────────────────────────────────────────────────────
@@ -126,6 +160,9 @@ def build_prompt(query: str, context_chunks: list[dict]) -> str:
 - 답변 끝에 근거가 된 조항을 [출처]에 적힌 이름 그대로 밝혀주세요. (예: 근거: 표준취업규칙 제33조(연차유급휴가))
 - 문서에 없는 내용은 모른다고 말해주세요.
 - 문서에 '00:00', '○○'처럼 비어 있는 값은 회사가 정해야 하는 부분이라고 안내해주세요.
+- 질문에 나온 제도나 용어가 문서에 없으면, 문서의 비슷한 제도를 설명하기 전에 그 제도는 문서에 없다고 먼저 밝혀주세요.
+  문서의 제도는 문서에 쓰인 이름 그대로 부르고, 질문의 용어로 바꿔 부르지 마세요.
+- 질문에 은어나 줄임말이 있어 뜻이 확실하지 않으면, 어떤 뜻으로 이해했는지 먼저 밝히고 답해주세요.
 
 질문: {query}"""
 

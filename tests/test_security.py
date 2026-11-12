@@ -94,3 +94,27 @@ def test_llm_receives_masked_question(monkeypatch):
     chatbot.answer_question("제 번호 010-1234-5678인데 월급날이 언제야?")
     assert "010-1234-5678" not in sent[0]
     assert "[전화번호]" in sent[0]
+
+
+# ── 검색 품질 보완 (도메인 평가셋에서 찾은 문제) ─────────────────────────────────
+def test_expand_query_adds_rule_terms_only_when_needed():
+    assert "연장근로" in chatbot.expand_query("야근하면 수당 더 줘요?")
+    assert "상여금" in chatbot.expand_query("보너스 얼마야?")
+    assert chatbot.expand_query("정년이 몇 살이야?") == "정년이 몇 살이야?"
+
+
+def test_rerank_keeps_one_chunk_per_article(monkeypatch):
+    class FakeReranker:
+        def predict(self, pairs):
+            return [0.9, 0.8, 0.7, 0.6]
+    monkeypatch.setattr(chatbot, "get_reranker", lambda: FakeReranker())
+    candidates = [{"label": "제35조", "text": "a"}, {"label": "제35조", "text": "b"},
+                  {"label": "제34조", "text": "c"}, {"label": "제33조", "text": "d"}]
+    assert [c["label"] for c in chatbot.rerank("1년 안 됐는데 휴가?", candidates)] == ["제35조", "제34조", "제33조"]
+
+
+def test_prompt_asks_to_flag_terms_missing_from_documents():
+    # 직접 쓴 질문 h07: '성과금'을 묻자 규정에 없는데도 상여금을 '성과금(상여금)'이라 부르며 답했다
+    prompt = chatbot.build_prompt("성과금 얼마야?", [{"label": "제55조(상여금 지급)", "text": "제55조 ..."}])
+    assert "문서에 없다고 먼저 밝혀" in prompt
+    assert "어떤 뜻으로 이해했는지" in prompt
